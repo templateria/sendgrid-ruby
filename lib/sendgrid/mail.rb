@@ -4,7 +4,7 @@ require 'mimemagic'
 
 module SendGrid
   class Mail
-    attr_accessor :to, :to_name, :from, :from_name, :subject, :text, :html, :cc, :cc_name,
+    attr_accessor :to, :to_name, :from, :from_name, :subject, :text, :html, :cc, :cc_name, :headers,
                   :bcc, :bcc_name, :reply_to, :date, :smtpapi, :attachments, :content, :template
 
     def initialize(params = {})
@@ -116,6 +116,10 @@ module SendGrid
       contents << {file: file, cid: cid, name: name}
     end
 
+    def headers
+      @headers || {}
+    end
+
     def smtpapi
       @smtpapi ||= Smtpapi::Header.new
     end
@@ -144,6 +148,7 @@ module SendGrid
         :bccname => bcc_name,
         :text => text,
         :html => html,
+        :headers => headers.to_json,
         :'x-smtpapi' => smtpapi_json,
         :content => ({":default"=>"0"} unless contents.empty?),
         :files => ({":default"=>"0"} unless attachments.empty? and contents.empty?)
