@@ -1,4 +1,6 @@
 require 'faraday'
+require 'base64'
+require 'cgi'
 
 module SendGrid
   class Client
@@ -22,32 +24,180 @@ module SendGrid
     end
 
     def send(mail)
-      res = conn.post do |req|
-        payload = mail.to_h
-        req.url(endpoint)
+      handle_response do
+        conn.post do |req|
+          payload = mail.to_h
+          req.url(endpoint)
 
-        # Check if using username + password or API key
-        if api_user
-          # Username + password
-          payload = payload.merge(api_user: api_user, api_key: api_key)
-        else
-          # API key
-          req.headers['Authorization'] = "Bearer #{api_key}"
+          apply_v2_authorization(req, payload)
+          req.body = payload
         end
-
-        req.body = payload
       end
-
-      fail SendGrid::Exception, res.body if raise_exceptions? && res.status != 200
-
-      SendGrid::Response.new(code: res.status, headers: res.headers, body: res.body)
     end
+
+    # Suppressions
+
+    def bounces(options = {})
+      handle_response do
+        conn.get do |req|
+          req.url('/v3/suppression/bounces')
+          apply_v3_authorization(req)
+          apply_v3_headers(req)
+          req.params = options
+        end
+      end
+    end
+
+    def delete_bounce(email)
+      handle_response(204) do
+        conn.delete do |req|
+          req.url("/v3/suppression/bounces/#{CGI.escape email}")
+          apply_v3_authorization(req)
+          apply_v3_headers(req)
+        end
+      end
+    end
+
+    # Whitelabel Domains
+
+    def create_whitelabel_domain(options = {})
+      handle_response(201) do
+        conn.post do |req|
+          req.url("/v3/whitelabel/domains")
+          apply_v3_authorization(req)
+          apply_v3_headers(req)
+          req.body = options.to_json
+        end
+      end
+    end
+
+    # API Keys
+
+    def scopes(options = {})
+      handle_response(200) do
+        conn.get do |req|
+          req.url("/v3/scopes")
+          apply_v3_authorization(req)
+          apply_v3_headers(req)
+          req.params = options
+        end
+      end
+    end
+
+    def api_keys(options = {})
+      handle_response(200) do
+        conn.get do |req|
+          req.url("/v3/api_keys")
+          apply_v3_authorization(req)
+          apply_v3_headers(req)
+          req.params = options
+        end
+      end
+    end
+
+    def get_api_key(id)
+      handle_response(200) do
+        conn.get do |req|
+          req.url("/v3/api_keys/#{id}")
+          apply_v3_authorization(req)
+          apply_v3_headers(req)
+        end
+      end
+    end
+
+    def create_api_key(options = {})
+      handle_response(201) do
+        conn.post do |req|
+          req.url("/v3/api_keys")
+          apply_v3_authorization(req)
+          apply_v3_headers(req)
+          req.body = options.to_json
+        end
+      end
+    end
+
+    def update_api_key(id, options = {})
+      handle_response(200) do
+        conn.put do |req|
+          req.url("/v3/api_keys/#{id}")
+          apply_v3_authorization(req)
+          apply_v3_headers(req)
+          req.body = options.to_json
+        end
+      end
+    end
+
+    # Subusers
+
+    def create_subuser(options = {})
+      handle_response(201) do
+        conn.post do |req|
+          req.url("/v3/subusers")
+          apply_v3_authorization(req)
+          apply_v3_headers(req)
+          req.body = options.to_json
+        end
+      end
+    end
+
+    # Apps
+
+    def get_available_apps
+      handle_response do
+        conn.get do |req|
+          payload = {}
+          req.url("/api/filter.getavailable.json")
+
+          apply_v2_authorization(req, payload)
+          req.params = payload
+        end
+      end
+    end
+
+    def update_filter_settings(options = {})
+      handle_response do
+        conn.post do |req|
+          payload = options
+          req.url("/api/filter.setup.json")
+
+          apply_v2_authorization(req, payload)
+          req.body = payload
+        end
+      end
+    end
+
+    def activate_app(name)
+      handle_response do
+        conn.post do |req|
+          payload = { name: name }
+          req.url("/api/filter.activate.json")
+
+          apply_v2_authorization(req, payload)
+          req.body = payload
+        end
+      end
+    end
+
+    def deactivate_app(name)
+      handle_response do
+        conn.post do |req|
+          payload = { name: name }
+          req.url("/api/filter.deactivate.json")
+
+          apply_v2_authorization(req, payload)
+          req.body = payload
+        end
+      end
+    end
+
+    private
 
     def conn
       @conn ||= Faraday.new(url: url) do |conn|
         conn.request :multipart
         conn.request :url_encoded
         conn.adapter adapter
+        conn.headers['User-Agent'] = user_agent
       end
     end
 
@@ -57,6 +207,43 @@ module SendGrid
 
     def raise_exceptions?
       @raise_exceptions
+    end
+
+    def apply_v2_authorization(request, payload)
+      # Check if using username + password or API key
+      if api_user
+        # Username + password
+        payload.merge!(api_user: api_user, api_key: api_key)
+      else
+        # API key
+        request.headers['Authorization'] = "Bearer #{api_key}"
+      end
+    end
+
+    def apply_v3_authorization(request)
+      if api_user
+        value = Base64.encode64([api_user, api_key].join(':'))
+        value.delete!("\n")
+        value = "Basic #{value}"
+      else
+        value = "Bearer #{api_key}"
+      end
+
+      request.headers['Authorization'] = value
+    end
+
+    def apply_v3_headers(request)
+      request.headers['Content-Type'] = 'application/json'
+    end
+
+    def handle_response(expected_status = 200)
+      res = yield
+
+      if raise_exceptions? && res.status != expected_status
+        fail SendGrid::Exception, res.body
+      end
+
+      SendGrid::Response.new(code: res.status, headers: res.headers, body: res.body)
     end
   end
 end
